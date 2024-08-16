@@ -38,3 +38,9 @@ A list of data-only attacks
         </tr>
     </tbody>
 </table>
+
+
+## Acknowledgment
+
+We thank National Science Foundation (NSF) for supporting our work.
+This research is supported by NSF under grant CNS-2247652.
