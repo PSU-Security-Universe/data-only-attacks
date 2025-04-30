@@ -1,8 +1,23 @@
 # p->doXdgOpen
 
-## Program
+This critical variable exists in [SQLite](https://www.sqlite.org/), a widely used lightweight database management system (DBMS).
 
-[SQLite 3.40.1](https://github.com/sqlite/)
+Our analysis is performed on version 3.40.1. The following instructions provide a way to obtain a copy of the source code.
+
+```bash
+$ git clone https://github.com/sqlite/sqlite.git
+$ cd sqlite
+$ git checkout version-3.40.1 #-> commit 1fdaa9d1a7
+```
+
+You may need to compile the source code to produce the file `sqlite3.c` and `shell.c`.
+
+```bash
+# (within sqlite folder)
+$ ./configure
+$ make
+$ ls -l sqlite3.c shell.c
+```
 
 ## TL;DR
 
