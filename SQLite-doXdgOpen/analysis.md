@@ -21,23 +21,23 @@ $ ls -l sqlite3.c shell.c
 
 ## TL;DR
 
-Structure `ShellState` maintains the shell session information, where `doXdgOpen` and `zTempFile` are two member fields. 
-
-If `p->doXdgOpen` is `true`, the following instructions `zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);` and `system(zCmd)` will be executed. Normally, `doXdgOpen` is `false`. An attacker can modify `doXdgOpen` and `zTempFile` at begining to perform attacks.
+Structure `ShellState` maintains the shell session information, where `doXdgOpen` and `zTempFile` are two member fields.
 
 Here is the related code:
 
 ```c
-    if( p->doXdgOpen ){
-    
-      const char *zXdgOpenCmd = "xdg-open";
-
-      char *zCmd;
-      zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
-      if( system(zCmd) ){
-        utf8_printf(stderr, "Failed: [%s]\n", zCmd);
-      }
+  if( p->doXdgOpen ){
+    const char *zXdgOpenCmd = "xdg-open";
+    char *zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
+    if (system(zCmd)) { ...; }
+  }
 ```
+
+If `p->doXdgOpen` is `true`, sqlite3 executes `sqlite3_mprintf()` to construct a command, and invokes `system(zCmd)` to execute the command.
+
+* Normally, `doXdgOpen` is `false`
+* An attacker can modify `doXdgOpen` and `zTempFile` to execute any command on victim systems.
+
 
 ## Description
 
