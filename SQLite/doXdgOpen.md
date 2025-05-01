@@ -7,10 +7,11 @@ Structure `ShellState` maintains the shell session information, where `doXdgOpen
 Here is the related code:
 
 ```c
-  // in sqlite3.c
+  // file: shel.c
+  // function: output_reset
 
   // p is pointing to a ShellState structure
-  if( p->doXdgOpen ){
+  if (p->doXdgOpen) {
     const char *zXdgOpenCmd = "xdg-open";
     char *zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
     if (system(zCmd)) { ...; }
@@ -25,7 +26,7 @@ If `p->doXdgOpen` is `true`, it means the SQLite output was being redirected to 
 
 ## Details
 
-Structure `ShellState` maintains the shell status information. Its defintion is as follows: 
+Structure `ShellState` maintains the shell status information. Its defintion is as follows.
 
 ```c
 // in shell.c
@@ -37,21 +38,15 @@ Structure `ShellState` maintains the shell status information. Its defintion is 
 typedef struct ShellState ShellState;
 struct ShellState {
   sqlite3 *db;           /* The database */
-  u8 autoExplain;        /* Automatically turn on .explain mode */
-  u8 autoEQP;            /* Run EXPLAIN QUERY PLAN prior to seach SQL stmt */
-  u8 autoEQPtest;        /* autoEQP is in test mode */
-  u8 autoEQPtrace;       /* autoEQP is in trace mode */
   ...
   u8 doXdgOpen;          /* Invoke start/open/xdg-open in output_reset() */
   ...
   char *zTempFile;       /* Temporary file that might need deleting */
   ...
-  EQPGraph sGraph;       /* Information for the graphical EXPLAIN QUERY PLAN */
-  ExpertInfo expert;     /* Valid if previous command was ".expert OPT..." */
 };
 ```
 
-Users can create a sqlite shell by simply typing `./sqlite3 [path-to-database-file]` or `./sqlite3`. By default, sqlite receives the SQL query (input to sqlite) from `stdin`, and prints the query results on `stdout`. Here is an example of the sqlite shell:
+Users can start an SQLite shell by simply typing `./sqlite3 [path-to-database-file]` or `./sqlite3`. By default, SQLite receives the SQL query (input to SQLite) from `stdin`, and prints the query result on `stdout`. Here is an example of the SQLite shell.
 
 ```bash
 $ ./sqlite3
@@ -63,9 +58,9 @@ sqlite> select * from T;
 2
 ```
 
-However, sometimes you may want to save the query result into a file. sqlite supports this feature with the following options:
+However, users may want to save the query result into a file. SQLite supports this feature with the following options.
 
-```sql
+```bash
 sqlite> .help
 .excel                   Display the output of next command in spreadsheet
 .once ?OPTIONS? ?FILE?   Output for the next SQL command only to FILE
@@ -75,9 +70,9 @@ sqlite> .help
 
 More details are available at https://www.sqlite.org/cli.html#writing_results_to_a_file
 
-More than that, sometimes you may want to edit the result a little bit before saving them into the file system. No problem, sqlite provides the nice feature that will save the result into a temporary file and immediately opens that file for you:
+More than that, users may want to edit the result a little bit before saving them into a file. SQLite nicely provides the feature that will save the result into a temporary file and immediately open that file for users.
 
-```sql
+```bash
 sqlite> .once -E
 .once ?OPTIONS? ?FILE?   Output for the next SQL command only to FILE
      If FILE begins with '|' then open as a pipe
@@ -85,12 +80,12 @@ sqlite> .once -E
        -e     Send output to the system text editor
        -x     Send output as CSV to a spreadsheet (same as ".excel")
 sqlite> .once -e
-sqlite> select * from T;   <------- try it
+sqlite> select * from T;       <------- try it
 ```
 
-After the last SQL query, sqlite will open the system text editor, which should contain the result of this query.
+After the last SQL query, SQLite will invoke the system text-editor to open the temporary file that contains the result.
 
-The implementation details of this feature is as follows. What we care about is the code for opening the system text editor in function `output_reset`:
+The implementation of this feature is as follows. What we care about is the code for invoking the system text-editor in function `output_reset`.
 
 ```c
 // in shell.c
@@ -110,7 +105,7 @@ static void output_reset(ShellState *p){
   } else {
     output_file_close(p->out);
 #ifndef SQLITE_NOHAVE_SYSTEM
-a.  if (p->doXdgOpen) {
+a:  if (p->doXdgOpen) {
       const char *zXdgOpenCmd =
 #if defined(_WIN32)
       "start";
@@ -120,8 +115,8 @@ a.  if (p->doXdgOpen) {
       "xdg-open";
 #endif
       char *zCmd;
-b.    zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
-c.    if (system(zCmd)) {
+b:    zCmd = sqlite3_mprintf("%s %s", zXdgOpenCmd, p->zTempFile);
+c:    if (system(zCmd)) {
         utf8_printf(stderr, "Failed: [%s]\n", zCmd);
       } else {
         /* Give the start/open/xdg-open command some time to get
@@ -140,4 +135,24 @@ c.    if (system(zCmd)) {
 }
 ```
 
-`output_reset` is the function that cleans up every thing and restores the output to the `stdout`. Pay attention to lines labeled with a, b, and c. In line a, sqlite checks whether `doXdgOpen` is set. This variable is set when the user types `.once -x` or `.once -e` or `.excel` (which means the user wants sqlite opens system text/excel editor to modify the result). If so, sqlite will move on to construct the command `zCmd`. `zXdgOpenCmd` is the system-specific command that automatically finds propoer applications to open particular-format files. On Linux system, the shell command is `xdg-open`, while on Mac, the shell command is `open`. The temporary file name is stored in `zTempFile`, which is a predefined string but can be updated by user command (this is why it is a variable, not a constant). At last, sqlite uses line c to run the command, which will pop up the window of either text editor or excel editor.
+`output_reset` cleans up the previous output setting and restores the output to `stdout`. We focus on lines labeled with `a`, `b`, and `c`.
+
+* Line `a`: SQLite checks whether `doXdgOpen` is set. This variable is set when the user types `.once -x`, `.once -e` or `.excel`, which means the user wants SQLite to invoke system text/excel-editor to modify the result. 
+
+* Line `b`: If so, SQLite will move on to construct the command `zCmd`. `zXdgOpenCmd` is the system-specific command that automatically finds propoer applications to open particular-format files.
+  * On Linux system, the shell command is `xdg-open`;
+  * On Mac, the shell command is `open`;
+  * On Windows, the command is `start`. 
+  
+  The temporary file name is stored in `zTempFile`, which is predefined but can be updated by user command. This is why it is a variable, not a constant.
+
+* At last, SQLite uses line `c` to run the command, which will pop up the window of either text editor or excel editor.
+
+## Idea for Attacks
+
+Once attackers have the capability to modify memory content, they can launch arbitrary code execution on vulnerable SQLite process in two steps.
+
+1. Corrupt `p->doXdgOpen` to `true` (or `1`)
+2. Corrupt `zTempFile` to `; bad-cmd`, where `bad-cmd` is the malicious command
+
+Then, SQLite will help execute the command `bad-cmd` for attackers.
