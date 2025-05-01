@@ -27,6 +27,6 @@ $ ls -l sqlite3.c shell.c
 
 # Data-only Attacks
 
-* [doXdgopen-attack](doXdgOpen-attack.md)
+* [doXdgOpen-attack](doXdgOpen-attack.md)
 * [isDetele-attack](isDelete-attack.md)
 * [zTempFile-attack](zTempFile-attack.md)
