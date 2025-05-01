@@ -2,4 +2,4 @@
 
 TODO
 
-The exploit JS file is [enable\_os\_system-poc.py](./enable_os_system-poc.py)
+The exploit JS file is [enable\_os\_system-poc.js](./enable_os_system-poc.js)
