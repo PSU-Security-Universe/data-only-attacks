@@ -21,7 +21,7 @@ $ ls -l sqlite3.c shell.c
 
 # Critical Variables
 
-* [doXdgOpen](doXdgopen.md)
+* [doXdgOpen](doXdgOpen.md)
 * [isDelete](isDelete.md)
 * [zTempFile](zTempFile.md)
 
