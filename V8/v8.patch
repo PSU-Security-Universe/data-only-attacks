@@ -1,0 +1,24 @@
+diff --color -ruN v8.orig/src/libplatform/default-platform.cc v8/src/libplatform/default-platform.cc
+--- v8.orig/src/libplatform/default-platform.cc	2023-08-07 16:15:07.542061694 -0400
++++ v8/src/libplatform/default-platform.cc	2023-08-07 13:40:49.162449073 -0400
+@@ -72,7 +72,7 @@
+   if (thread_pool_size < 1) {
+     thread_pool_size = base::SysInfo::NumberOfProcessors() - 1;
+   }
+-  return std::max(std::min(thread_pool_size, kMaxThreadPoolSize), 1);
++  return std::max(std::min(thread_pool_size, kMaxThreadPoolSize), 0);
+ }
+ }  // namespace
+ 
+diff --color -ruN v8.orig/src/libplatform/delayed-task-queue.cc v8/src/libplatform/delayed-task-queue.cc
+--- v8.orig/src/libplatform/delayed-task-queue.cc	2023-08-07 16:14:54.593920663 -0400
++++ v8/src/libplatform/delayed-task-queue.cc	2023-08-07 13:41:03.786556477 -0400
+@@ -17,7 +17,7 @@
+ DelayedTaskQueue::~DelayedTaskQueue() {
+   base::MutexGuard guard(&lock_);
+   DCHECK(terminated_);
+-  DCHECK(task_queue_.empty());
++  // DCHECK(task_queue_.empty());
+ }
+ 
+ double DelayedTaskQueue::MonotonicallyIncreasingTime() {
