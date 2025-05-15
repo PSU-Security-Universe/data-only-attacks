@@ -7,7 +7,7 @@ Structure `ShellState` maintains the shell session information, where `doXdgOpen
 Here is the related code:
 
 ```c
-  // file: shel.c
+  // file: shell.c
   // function: output_reset
 
   // p is pointing to a ShellState structure
@@ -139,7 +139,7 @@ c:    if (system(zCmd)) {
 
 * Line `a`: SQLite checks whether `doXdgOpen` is set. This variable is set when the user types `.once -x`, `.once -e` or `.excel`, which means the user wants SQLite to invoke system text/excel-editor to modify the result. 
 
-* Line `b`: If so, SQLite will move on to construct the command `zCmd`. `zXdgOpenCmd` is the system-specific command that automatically finds propoer applications to open particular-format files.
+* Line `b`: If so, SQLite will move on to construct the command `zCmd`. `zXdgOpenCmd` is the system-specific command that automatically finds proper applications to open particular-format files.
   * On Linux system, the shell command is `xdg-open`;
   * On Mac, the shell command is `open`;
   * On Windows, the command is `start`. 
