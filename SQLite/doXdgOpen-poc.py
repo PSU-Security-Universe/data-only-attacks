@@ -36,7 +36,6 @@ offset_doXdgOpen_ShellState = 0xe
 offset_zTempFile_ShellState = 0x98
 
 base = 0x667ad8
-base2 = base + 0x400
 
 #----------------------------------------------------------
 # expected layout:
