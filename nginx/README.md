@@ -19,6 +19,4 @@ tar zxf nginx-1.20.2.tar.gz
 
 * [ngx_terminate/ngx_quit](ngx_terminate_quit.md)
 
-* [ft.st_uid](st_uid.md)
-
-* [ft.st_mode](st_mode.md)
+* [ft.st_uid/ft.st_mode](st_uid_mode.md)
